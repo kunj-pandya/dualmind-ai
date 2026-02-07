@@ -28,6 +28,11 @@ export default function Home() {
         }),
       });
 
+      const convId = res.headers.get("x-conversation-id");
+      if (convId && !conversationId) {
+        setConversationId(convId);
+      }
+
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
 

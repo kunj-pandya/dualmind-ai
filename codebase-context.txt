@@ -1,0 +1,359 @@
+File: app/api/chat-stream/route.js
+--------------------
+import OpenAI from "openai";
+import connectDB from "@/lib/db.js";
+import Conversation from "@/models/Conversation";
+
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+});
+
+export async function POST(request) {
+
+    console.log("🔥 /api/chat-stream HIT");
+
+    try {
+        await connectDB();
+
+        const { message, conversationId } = await request.json();
+
+        if (!message) {
+            return new Response(
+                JSON.stringify({ error: "Message body is missing." }),
+                { status: 400 }
+            );
+        }
+
+        // Find or create conversation
+        let conversation;
+        if (conversationId) {
+            conversation = await Conversation.findById(conversationId);
+        }
+
+        if (!conversation) {
+            conversation = await Conversation.create({ messages: [] });
+            console.log("✅ New Conversation Created:", conversation._id);
+        } else {
+            console.log("🔍 Found Conversation:", conversation._id);
+        }
+
+        // Save User Message
+        const userMessage = { role: "user", content: message };
+        conversation.messages.push(userMessage);
+        await conversation.save();
+
+        // Prepare context (Last 10 messages)
+        const history = conversation.messages.slice(-10).map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+        }));
+
+        // Send to OpenAI
+        const stream = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: history,
+            stream: true,
+        });
+
+        const encoder = new TextEncoder();
+        let assistantMessageContent = "";
+
+        const readableStream = new ReadableStream({
+            async start(controller) {
+                try {
+                    for await (const chunk of stream) {
+                        const content = chunk.choices[0]?.delta?.content;
+                        if (content) {
+                            assistantMessageContent += content;
+                            controller.enqueue(encoder.encode(content));
+                        }
+                    }
+
+                    // Save Assistant Message when stream ends
+                    conversation.messages.push({
+                        role: "assistant",
+                        content: assistantMessageContent,
+                    });
+                    await conversation.save();
+                    console.log("📝 Assistant Message Saved");
+
+                } catch (err) {
+                    controller.error(err);
+                } finally {
+                    controller.close();
+                }
+            },
+        });
+
+        return new Response(readableStream, {
+            headers: {
+                "Content-Type": "text/plain; charset=utf-8",
+                "x-conversation-id": conversation._id.toString(),
+            },
+        });
+
+    } catch (error) {
+        console.error("OpenAI API Error:", error);
+        return new Response(
+            JSON.stringify({ error: error.message }),
+            { status: 500 }
+        );
+    }
+}
+--------------------
+
+File: lib/db.js
+--------------------
+// lib/db.js
+import mongoose from "mongoose";
+
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+    throw new Error("MONGODB_URI not defined");
+}
+
+let cached = global.mongoose || { conn: null, promise: null };
+
+export default async function connectDB() {
+    if (cached.conn) return cached.conn;
+
+    if (!cached.promise) {
+        cached.promise = mongoose.connect(MONGODB_URI, {
+            bufferCommands: false,
+        });
+    }
+
+    cached.conn = await cached.promise;
+    global.mongoose = cached;
+    console.log("✅ MongoDB Connected");
+    return cached.conn;
+}
+--------------------
+
+File: models/Conversation.js
+--------------------
+// models/Conversation.js
+import mongoose from "mongoose";
+
+const MessageSchema = new mongoose.Schema({
+    role: {
+        type: String,
+        enum: ["user", "assistant"],
+        required: true,
+    },
+    content: String,
+    createdAt: {
+        type: Date,
+        default: Date.now,
+    },
+});
+
+const ConversationSchema = new mongoose.Schema({
+    messages: [MessageSchema],
+    createdAt: {
+        type: Date,
+        default: Date.now,
+    },
+});
+
+export default mongoose.models.Conversation ||
+    mongoose.model("Conversation", ConversationSchema);
+--------------------
+
+File: app/page.js
+--------------------
+"use client";
+
+import { useState } from "react";
+
+export default function Home() {
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [response, setResponse] = useState("");
+  const [streamResponse, setStreamResponse] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [conversationId, setConversationId] = useState(null);
+
+
+  //  Streaming Chat
+  const handleStreamChat = async () => {
+    if (!message.trim()) return;
+
+    setStreaming(true);
+    setStreamResponse("");
+
+    try {
+      const res = await fetch("/api/chat-stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          conversationId,
+        }),
+      });
+
+      const convId = res.headers.get("x-conversation-id");
+      if (convId && !conversationId) {
+        setConversationId(convId);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        setStreamResponse((prev) => prev + chunk);
+      }
+    } catch (error) {
+      setStreamResponse("Error: " + error.message);
+    } finally {
+      setStreaming(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0d1117] text-gray-100 flex flex-col items-center justify-center p-6 font-sans transition-colors">
+      <div className="max-w-2xl w-full bg-[#161b22] p-8 rounded-2xl shadow-xl border border-[#1f6feb]/30">
+        <h1 className="text-3xl font-semibold mb-6 text-center text-blue-400">
+          DualMind AI
+        </h1>
+
+        <textarea
+          className="w-full h-32 p-4 mb-4 rounded-xl bg-[#0d1117] border border-[#1f6feb]/40 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-600 transition-all"
+          placeholder="Type your message here..."
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+        />
+
+        <div className="flex gap-4 justify-center mb-6">
+
+
+          <button
+            onClick={handleStreamChat}
+            disabled={streaming}
+            className={`px-6 py-2 rounded-lg font-medium text-white transition-all duration-300 ${streaming
+              ? "bg-indigo-800 opacity-60 cursor-not-allowed"
+              : "bg-indigo-600 hover:bg-indigo-700 active:scale-95"
+              }`}
+          >
+            {streaming ? "Streaming..." : "Stream Chat"}
+          </button>
+        </div>
+
+
+
+        {/* Streaming Chat Response */}
+        {streamResponse && (
+          <div className="p-4 bg-[#0d1117] border border-[#1f6feb]/30 rounded-lg">
+            <p className="text-indigo-300 font-semibold mb-2">
+              Response:
+            </p>
+            <p className="whitespace-pre-wrap text-gray-100 leading-relaxed">
+              {streamResponse}
+            </p>
+          </div>
+        )}
+      </div>
+
+      <footer className="mt-6 text-sm text-gray-500">
+        Built with 💙 Gemini API & Next.js
+      </footer>
+    </div>
+  );
+}
+--------------------
+
+File: app/layout.js
+--------------------
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata = {
+  title: "Create Next App",
+  description: "Generated by create next app",
+};
+
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en">
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
+        {children}
+      </body>
+    </html>
+  );
+}
+--------------------
+
+File: app/globals.css
+--------------------
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+--------------------
+
+File: package.json
+--------------------
+{
+  "name": "dualmind",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build --turbopack",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@google/genai": "^1.24.0",
+    "@google/generative-ai": "^0.24.1",
+    "next": "15.5.4",
+    "openai": "^6.18.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "24.7.1",
+    "@types/react": "19.2.2",
+    "tailwindcss": "^4",
+    "typescript": "5.9.3"
+  }
+}
