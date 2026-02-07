@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+
+
 
 export default function Home() {
   const [message, setMessage] = useState("");
@@ -11,6 +13,33 @@ export default function Home() {
   const [conversationId, setConversationId] = useState(null);
   const [messages, setMessages] = useState([]);
 
+  useEffect(() => {
+    const savedConversationId = localStorage.getItem("conversationId");
+
+    if (savedConversationId) {
+      setConversationId(savedConversationId);
+      loadConversation(savedConversationId);
+    }
+  }, []);
+
+
+  const loadConversation = async (id) => {
+    try {
+      const res = await fetch(`/api/conversation/${id}`);
+      const data = await res.json();
+
+      if (data.messages) {
+        setMessages(
+          data.messages.map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+          }))
+        );
+      }
+    } catch (error) {
+      console.error("Failed to load conversation", error);
+    }
+  };
 
 
   //  Streaming Chat
@@ -35,10 +64,12 @@ export default function Home() {
         }),
       });
 
+
       // 2. Save conversationId
       const convId = res.headers.get("x-conversation-id");
       if (convId && !conversationId) {
         setConversationId(convId);
+        localStorage.setItem("conversationId", convId);
       }
 
       const reader = res.body.getReader();
