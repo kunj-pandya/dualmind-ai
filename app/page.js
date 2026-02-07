@@ -9,6 +9,8 @@ export default function Home() {
   const [streamResponse, setStreamResponse] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [conversationId, setConversationId] = useState(null);
+  const [messages, setMessages] = useState([]);
+
 
 
   //  Streaming Chat
@@ -16,7 +18,12 @@ export default function Home() {
     if (!message.trim()) return;
 
     setStreaming(true);
-    setStreamResponse("");
+
+    // 1. Add user message to UI immediately
+    const userMessage = { role: "user", content: message };
+    setMessages((prev) => [...prev, userMessage]);
+
+    setMessage(""); // clear textarea
 
     try {
       const res = await fetch("/api/chat-stream", {
@@ -28,6 +35,7 @@ export default function Home() {
         }),
       });
 
+      // 2. Save conversationId
       const convId = res.headers.get("x-conversation-id");
       if (convId && !conversationId) {
         setConversationId(convId);
@@ -36,15 +44,28 @@ export default function Home() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
 
+      // 3. Add empty assistant message (for streaming)
+      let assistantMessage = { role: "assistant", content: "" };
+      setMessages((prev) => [...prev, assistantMessage]);
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         const chunk = decoder.decode(value, { stream: true });
-        setStreamResponse((prev) => prev + chunk);
+
+        // 4. Update LAST assistant message
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            content: updated[updated.length - 1].content + chunk,
+          };
+          return updated;
+        });
       }
     } catch (error) {
-      setStreamResponse("Error: " + error.message);
+      console.error(error);
     } finally {
       setStreaming(false);
     }
@@ -56,6 +77,21 @@ export default function Home() {
         <h1 className="text-3xl font-semibold mb-6 text-center text-blue-400">
           DualMind AI
         </h1>
+
+        <div className="space-y-4 mb-6 max-h-[400px] overflow-y-auto">
+          {messages.map((msg, index) => (
+            <div
+              key={index}
+              className={`p-4 rounded-lg max-w-[85%] whitespace-pre-wrap ${msg.role === "user"
+                ? "ml-auto bg-indigo-600 text-white"
+                : "mr-auto bg-[#0d1117] border border-[#1f6feb]/30 text-gray-100"
+                }`}
+            >
+              {msg.content}
+            </div>
+          ))}
+        </div>
+
 
         <textarea
           className="w-full h-32 p-4 mb-4 rounded-xl bg-[#0d1117] border border-[#1f6feb]/40 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-600 transition-all"
@@ -95,7 +131,7 @@ export default function Home() {
       </div>
 
       <footer className="mt-6 text-sm text-gray-500">
-        Built with 💙 Gemini API & Next.js
+        Built with ❤ OpenAI API & Next.js
       </footer>
     </div>
   );
