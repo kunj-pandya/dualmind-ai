@@ -8,28 +8,8 @@ export default function Home() {
   const [response, setResponse] = useState("");
   const [streamResponse, setStreamResponse] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [conversationId, setConversationId] = useState(null);
 
-  // Normal Chat
-  const handleChat = async () => {
-    if (!message.trim()) return;
-    setLoading(true);
-    setResponse("");
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
-
-      const data = await res.json();
-      setResponse(data.message || "No response received.");
-    } catch (error) {
-      setResponse("Error: " + error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   //  Streaming Chat
   const handleStreamChat = async () => {
@@ -42,7 +22,10 @@ export default function Home() {
       const res = await fetch("/api/chat-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({
+          message,
+          conversationId,
+        }),
       });
 
       const reader = res.body.getReader();
@@ -77,16 +60,7 @@ export default function Home() {
         />
 
         <div className="flex gap-4 justify-center mb-6">
-          <button
-            onClick={handleChat}
-            disabled={loading}
-            className={`px-6 py-2 rounded-lg font-medium text-white transition-all duration-300 ${loading
-              ? "bg-blue-800 opacity-60 cursor-not-allowed"
-              : "bg-blue-600 hover:bg-blue-700 active:scale-95"
-              }`}
-          >
-            {loading ? "Thinking..." : "Chat"}
-          </button>
+
 
           <button
             onClick={handleStreamChat}
@@ -100,15 +74,7 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Normal Chat Response */}
-        {response && (
-          <div className="p-4 bg-[#0d1117] border border-[#1f6feb]/30 rounded-lg mb-3">
-            <p className="text-blue-300 font-semibold mb-2">Response:</p>
-            <p className="whitespace-pre-wrap text-gray-100 leading-relaxed">
-              {response}
-            </p>
-          </div>
-        )}
+
 
         {/* Streaming Chat Response */}
         {streamResponse && (
@@ -116,7 +82,7 @@ export default function Home() {
             <p className="text-indigo-300 font-semibold mb-2">
               Response:
             </p>
-            <p className="whitespace-pre-wrap text-gray-100 leading-relaxed animate-pulse">
+            <p className="whitespace-pre-wrap text-gray-100 leading-relaxed">
               {streamResponse}
             </p>
           </div>
